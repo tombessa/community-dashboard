@@ -20,3 +20,5 @@ env/
 .flake8
 .pytest_cache/
 .mypy_cache/
+
+logs/
