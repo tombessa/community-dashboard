@@ -1,11 +1,10 @@
 from contextlib import closing
 import sqlite3
-import pandas as pd
-from github import Github, RateLimitExceededException
+from github import Github
 import streamlit as st
 from datetime import timedelta
-
 from src.job.help_db import DB_PATH, save_github_item, start_sync, finish_sync, fail_sync
+import logging
 
 
 def get_github_client():
@@ -20,23 +19,21 @@ def get_github_client():
     # Fallback to unauthenticated client (lower rate limits)
     return Github()
 
+logger = logging.getLogger(__name__)
+
 def synchronize_repository(
         repo_name,
         start_at=None,
         end_before=None,
 ):
-    """
-    Synchronize a manual date range or use the automatic cursor.
-
-    Manual range runs do not advance the automatic cursor or mark
-    the initial historical load as complete.
-    """
+    """Synchronize a manual interval or resume from the stored cursor."""
     if start_at is not None:
         if end_before is None or start_at >= end_before:
             raise ValueError(
                 "A valid exclusive end timestamp is required."
             )
 
+        # Manual imports must not advance the automatic cursor.
         return sync_repo_data(
             repo_name=repo_name,
             since=start_at,
@@ -48,19 +45,35 @@ def synchronize_repository(
             "An end timestamp requires a start timestamp."
         )
 
-    started_at, stored_since = start_sync(repo_name)
+    started_at, since = start_sync(repo_name)
+
+    logger.info(
+        "Automatic synchronization started: "
+        "repository=%s, since=%s, end_exclusive=%s",
+        repo_name,
+        since.isoformat(),
+        started_at.isoformat(),
+    )
 
     try:
         total = sync_repo_data(
             repo_name=repo_name,
-            since=stored_since,
+            since=since,
+            end_before=started_at,
         )
 
+        # Advance the cursor only after all items have been committed.
         finish_sync(repo_name, started_at)
 
     except Exception as error:
         fail_sync(repo_name, error)
         raise
+
+    logger.info(
+        "Automatic synchronization completed: repository=%s, items=%s",
+        repo_name,
+        total,
+    )
 
     return total
 

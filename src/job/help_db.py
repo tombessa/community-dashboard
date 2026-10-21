@@ -14,12 +14,15 @@ def to_iso(value):
 
     return value.astimezone(timezone.utc).isoformat()
 
+DEFAULT_IMPORT_START = datetime(2025, 1, 1, tzinfo=timezone.utc)
+SYNC_OVERLAP = timedelta(minutes=5)
+
 def start_sync(repo_name):
+    """Start a synchronization attempt and resolve its lower boundary."""
     started_at = datetime.now(timezone.utc)
 
     with closing(sqlite3.connect(DB_PATH, timeout=30)) as conn:
         with conn:
-            # Cria o controle somente se ainda não existir.
             conn.execute(
                 """
                 INSERT INTO sync_state (repository)
@@ -29,7 +32,7 @@ def start_sync(repo_name):
                 (repo_name,),
             )
 
-            row = conn.execute(
+            initial_sync_completed, cursor = conn.execute(
                 """
                 SELECT initial_sync_completed, incremental_cursor
                 FROM sync_state
@@ -37,6 +40,18 @@ def start_sync(repo_name):
                 """,
                 (repo_name,),
             ).fetchone()
+
+            since = DEFAULT_IMPORT_START
+
+            if initial_sync_completed and cursor:
+                cursor_at = datetime.fromisoformat(
+                    cursor.replace("Z", "+00:00")
+                )
+
+                since = max(
+                    DEFAULT_IMPORT_START,
+                    cursor_at - SYNC_OVERLAP,
+                    )
 
             conn.execute(
                 """
@@ -48,17 +63,6 @@ def start_sync(repo_name):
                 """,
                 (to_iso(started_at), repo_name),
             )
-
-    initial_sync_completed, cursor = row
-
-    # Sem carga inicial concluída, repetimos a busca completa.
-    since = None
-
-    if initial_sync_completed and cursor:
-        since = (
-                datetime.fromisoformat(cursor.replace("Z", "+00:00"))
-                - timedelta(minutes=5)
-        )
 
     return started_at, since
 
